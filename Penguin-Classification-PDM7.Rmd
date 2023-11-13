@@ -1,0 +1,249 @@
+---
+title: "Penguins-Classification"
+author: "Naufal"
+date: "11/12/2023"
+output: html_document
+---
+#Install Package
+```{r install}
+install.packages("recipes", dependencies = FALSE)
+install.packages("psych")
+install.packages("ROCR")
+```
+#Import Library
+
+```{r load packages}
+library(tidyverse)        # library for data manipulation
+library(palmerpenguins)   # library for load penguins dataset
+library(caret)            # library for KNN, Logistic Regression
+library(e1071)            # library for Naive Bayes
+library(naivebayes)       # library for Naive Bayes
+library(corrplot)         # library for correlation matrix
+library(psych)            # library for Convert a factor to a matrix of dummy codes
+library(MASS)             # library for perform stepwise model selection
+library(ROCR)             # library for analyze ROC curve
+```
+
+#Data Exploration
+```{r gathering data}
+data <- penguins
+
+head(data)
+tail(data)
+```
+summarize(data)
+# Data Exploration
+```{r eda}
+# cek ringkasan data
+summary(data)
+
+# cek missing value
+print(colSums(is.na(data)))
+print(sum(is.na(data)))
+
+# statistika deskriptif by species
+data %>% 
+  drop_na() %>% 
+  group_by(species) %>% 
+  summarize(min_fl = min(flipper_length_mm), 
+            max_fl = max(flipper_length_mm),
+            mean_fl = mean(flipper_length_mm),
+            min_bd = min(body_mass_g), 
+            max_bd = max(body_mass_g),
+            mean_bd = mean(body_mass_g))
+
+# structure data
+str(data)
+```
+# Cleaning Data
+```{r clean}
+# Removing year column
+data$year <- NULL 
+head(data)
+
+# Removing missing value
+penguin_df <- na.omit(data)
+head(penguin_df)
+
+print(sum(is.na(penguin_df)))
+summary(penguin_df)
+str(penguin_df)
+```
+
+# plot the data
+```{r plot}
+# barplot by species
+ggplot(penguin_df) +
+  geom_bar(mapping = aes(x=species, fill=species)) +
+  labs(title = "Number of Penguins",
+       subtitle = "by species",
+       x = "Species",
+       y = "Number of Penguins")
+
+# scatter plot by species with flipper & body mass
+ggplot(penguin_df) + 
+  geom_point(mapping = aes(x=flipper_length_mm, 
+                           y=body_mass_g, 
+                           shape = species, 
+                           color = species)) +
+  labs(title = "flipper length vs body mass of penguin data",
+       subtitle = "sample of three species",
+       caption = "Data collected by Dr. Kristen Gorman") +
+  theme(plot.title = element_text(hjust = 0.5), 
+        plot.subtitle = element_text(hjust = 0.5)) +
+  annotate("text", x=220, y=3500, 
+           label="The Gentoos are largest", 
+           color = "blue",
+           fontface = "italic",
+           size = 3.5,
+           angle = 15)
+```
+
+# data split
+```{r split}
+set.seed(622)
+data_index <- sample(1:nrow(penguin_df), 0.8*nrow(penguin_df))
+
+data_train <- penguin_df[data_index,]
+data_test <- penguin_df[-data_index,]
+data_test
+data_train
+```
+
+# Naive Bayes
+```{r nb}
+# create dataframe for accuracy
+scores <- data.frame()
+
+# definizing x and y for naive
+features <- setdiff(names(data_train), "species")
+x <- data_train[,features]
+y <- data_train$species
+
+# create model
+model_naive <- naiveBayes(x = x,y = y, laplace = 1)
+
+# data test
+result_naive <- predict(model_naive, data_test %>% dplyr::select(-species))
+
+# Make confusion matrix
+cm_naive <- confusionMatrix(result_naive, data_test$species)
+nb_acc <- cm_naive[[3]][1]
+scores <- rbind(scores, data.frame(model="NB", accuracy=nb_acc))
+cm_naive
+```
+```{r nbtraintest}
+trControl <- trainControl(method  = "cv",
+                          number  = 10)
+nb_fit <- train(x,
+             y,
+             method     = "naive_bayes",
+             trControl  = trControl,
+             )
+nb_fit
+```
+
+# K-Nearest Neighbors
+```{r knn}
+penguins_knn_df <- penguin_df
+penguins_knn_df$sex <- as.numeric(penguins_knn_df$sex)-1 # recode as 1 or 0
+
+# Data Partitioning
+knn_training <- penguins_knn_df[data_index,]
+knn_testing  <- penguins_knn_df[-data_index,]
+knn_training
+knn_testing
+```
+```{r knnmodel}
+
+knn_fit <- train(species ~ .,
+             method     = "knn",
+             tuneGrid   = expand.grid(k = 1:10),
+             trControl  = trControl,
+             preProcess = c("center","scale"),
+             metric     = "Accuracy",
+             data       = knn_training
+             )
+knn_fit
+```
+```{r knnpredict}
+knn_Predict <- predict(knn_fit, newdata = knn_testing) 
+cm_knn <- confusionMatrix(knn_Predict, knn_testing$species)
+knn_acc <- cm_knn[[3]][1]
+scores <-rbind(scores, data.frame(model="KNN", accuracy=knn_acc))
+cm_knn
+```
+# Logistic Regression
+```{r reg}
+reg_df <- penguin_df
+reg_df$sex <- as.numeric(reg_df$sex)-1                      # recode as 1 or 0
+reg_df$adelie <- ifelse(reg_df$species=="Adelie", 1, 0) 
+reg_df$adelie
+
+dim(reg_df)
+head(reg_df, 10)
+
+# Make new dataframe
+new_reg_df <- dplyr::select(reg_df, -'species')
+head(new_reg_df, 5)
+
+# Changes adelie columns into factor
+new_reg_df$adelie <- as.factor(new_reg_df$adelie)
+head(new_reg_df, 5)
+
+# Dummy code the island feature - this creates a new column for each island (0 || 1)
+island_code_df <- as.data.frame(dummy.code(new_reg_df$island))
+dim(island_code_df)
+
+# Adding column in island_code_df to new data
+new_reg_df2 <- cbind(new_reg_df, island_code_df)
+dim(new_reg_df2)
+
+# Remove year and island columns
+new_reg_df2 <- new_reg_df2 %>%
+                  dplyr::select(-'island')
+dim(new_reg_df2)
+head(new_reg_df2, 5)
+
+# Data Partitioning
+reg_training <- new_reg_df2[data_index,]
+reg_testing  <- new_reg_df2[-data_index,]
+reg_training
+reg_testing
+```
+
+```{r regmodel}
+# model biner logistic
+reg_biner_model <- glm(adelie ~ .,
+                       family = 'binomial' (link = 'logit'),
+                       data = reg_training)
+reg_biner_model
+
+# AIC reduced model
+reg_aic_model <- reg_biner_model %>%
+                    stepAIC(trace = FALSE)
+reg_aic_model
+```
+```{r regpredict}
+reg_biner_pred <- predict(reg_aic_model, newdata = reg_testing, type = "response")
+reg_biner_pred
+
+threshold <- 0.5
+
+reg_pred_class <- ifelse(reg_biner_pred > threshold, 1, 0)
+reg_pred_class
+
+cmtable_reg_biner <- table(reg_testing$adelie, reg_pred_class)
+cmtable_reg_biner
+
+reg_pred_accuracy <- sum(reg_pred_class == reg_testing$adelie)/length(reg_testing$adelie)
+cat("Accuracy:", reg_pred_accuracy, "\n")
+
+scores <- rbind(scores, data.frame(model="Regression Logistic", accuracy=reg_pred_accuracy))
+```
+# Model Comparison
+```{r scores}
+scores
+```
+
+
